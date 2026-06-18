@@ -38,6 +38,37 @@ PAGE_W, PAGE_H = A4
 STEP_X = LABEL_W + GAP_X
 STEP_Y = LABEL_H + GAP_Y
 
+# ── Label series ─────────────────────────────────────────────────────────────
+# QR codes always encode "ASN" + a globally unique 5-digit number.
+# Each series gets a fixed base so all series share one Paperless-ngx prefix
+# (PAPERLESS_CONSUMER_ASN_BARCODE_PREFIX=ASN).
+#
+#   code    description                 base   global range
+#   CNTR    Contracten                     0   ASN00001 - ASN09999
+#   REK     Rekeningen                10000   ASN10001 - ASN19999
+#   DIV     Diverse                   20000   ASN20001 - ASN29999
+#   GAR     Garanties & Handleidingen 30000   ASN30001 - ASN39999
+#
+# The label text shows the series code + the same global number,
+# so the number visible on the sticker matches the ASN in Paperless.
+SERIES = [
+    ("CNTR", "Contracten",                          0),
+    ("REK",  "Rekeningen",                     10_000),
+    ("DIV",  "Diverse",                        20_000),
+    ("GAR",  "Garanties & Handleidingen",      30_000),
+]
+QR_PREFIX = "ASN"
+DIGITS    = 5
+MAX_LOCAL = 9_999    # labels per series
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _series_by_code(code: str) -> Optional[tuple]:
+    for entry in SERIES:
+        if entry[0] == code.upper():
+            return entry
+    return None
+
 
 def _qr_image(data: str) -> io.BytesIO:
     qr = qrcode.QRCode(
@@ -56,7 +87,7 @@ def _qr_image(data: str) -> io.BytesIO:
 
 
 def _draw_one_label(c: canvas.Canvas, x: float, y: float,
-                    asn: int, prefix: str, digits: int, border: bool) -> None:
+                    global_asn: int, series_name: str, border: bool) -> None:
     """Draw a single label with its bottom-left corner at (x, y) in points."""
     if border:
         c.setStrokeColorRGB(0.7, 0.7, 0.7)
@@ -65,22 +96,22 @@ def _draw_one_label(c: canvas.Canvas, x: float, y: float,
 
     PAD = 1.0 * mm
 
-    # QR code — square, centred vertically, flush left with padding
+    # QR code encodes "ASN" + globally unique number (scanned by Paperless-ngx)
     qr_size = LABEL_H - 2 * PAD          # 8 mm
-    asn_str = f"{prefix}{asn:0{digits}d}"
-    c.drawImage(ImageReader(_qr_image(asn_str)),
+    qr_data = f"{QR_PREFIX}{global_asn:0{DIGITS}d}"
+    c.drawImage(ImageReader(_qr_image(qr_data)),
                 x + PAD, y + PAD, width=qr_size, height=qr_size, mask="auto")
 
-    # Text to the right of the QR code
+    # Text: series code (top) + global ASN number (bottom) — matches Paperless ASN
     text_x = x + PAD + qr_size + PAD
     mid_y  = y + LABEL_H / 2
 
     c.setFillColorRGB(0, 0, 0)
     c.setFont("Helvetica-Bold", 4.0)
-    c.drawString(text_x, mid_y + 1.5, prefix)
+    c.drawString(text_x, mid_y + 1.5, series_name)
 
     c.setFont("Helvetica", 5.0)
-    c.drawString(text_x, mid_y - 5.5, f"{asn:0{digits}d}")
+    c.drawString(text_x, mid_y - 5.5, f"{global_asn:0{DIGITS}d}")
 
 
 def _draw_calibration(c: canvas.Canvas) -> None:
@@ -97,7 +128,7 @@ def _draw_calibration(c: canvas.Canvas) -> None:
     c.showPage()
 
 
-def generate(start: int, count: int, prefix: str, digits: int,
+def generate(global_start: int, count: int, series_name: str,
              output: str, border: bool) -> None:
     c = canvas.Canvas(output, pagesize=A4)
     idx = 0
@@ -108,22 +139,13 @@ def generate(start: int, count: int, prefix: str, digits: int,
                     break
                 x = LEFT + col * STEP_X
                 y = PAGE_H - TOP - row * STEP_Y - LABEL_H
-                _draw_one_label(c, x, y, start + idx, prefix, digits, border)
+                _draw_one_label(c, x, y, global_start + idx, series_name, border)
                 idx += 1
             if idx >= count:
                 break
         if idx < count:
             c.showPage()
     c.save()
-
-
-SERIES = [
-    ("CNTR", "Contracten"),
-    ("REK",  "Rekeningen"),
-    ("DIV",  "Diverse"),
-    ("GAR",  "Garanties & Handleidingen"),
-]
-DIGITS = 5   # zero-padding width: CNTR00001
 
 
 def _ask_int(prompt: str, default: Optional[int] = None) -> int:
@@ -140,20 +162,21 @@ def _ask_int(prompt: str, default: Optional[int] = None) -> int:
 
 def interactive() -> None:
     print()
-    print("=" * 48)
+    print("=" * 56)
     print("  ASN Sticker Generator  -  Topstick 8790")
-    print("=" * 48)
+    print("=" * 56)
     print()
     print("Kies een reeks:")
-    for i, (code, desc) in enumerate(SERIES, 1):
-        print(f"  {i}. {code:<5}  {desc}")
+    for i, (code, desc, base) in enumerate(SERIES, 1):
+        lo = base + 1
+        hi = base + MAX_LOCAL
+        print(f"  {i}. {code:<5}  {desc:<30}  (ASN {lo:05d} - {hi:05d})")
     print(f"  {len(SERIES)+1}. Kalibratie raster (leeg raster voor uitlijning)")
     print()
 
     keuze = _ask_int(f"Keuze (1-{len(SERIES)+1})")
     print()
 
-    # Calibration grid
     if keuze == len(SERIES) + 1:
         output = "kalibratie.pdf"
         c = canvas.Canvas(output, pagesize=A4)
@@ -167,39 +190,47 @@ def interactive() -> None:
         print("Ongeldige keuze.")
         return
 
-    prefix, desc = SERIES[keuze - 1]
-    print(f"Reeks: {prefix} - {desc}")
-    start = _ask_int("Eerste nummer")
-    count = _ask_int("Aantal labels", default=COLS * ROWS)
-    border = input("Rand om elke sticker tekenen? (j/n) [n]: ").strip().lower() == "j"
+    code, desc, base = SERIES[keuze - 1]
+    print(f"Reeks  : {code} - {desc}")
+    print(f"Bereik : ASN{base+1:05d} - ASN{base+MAX_LOCAL:05d}")
+    print()
+
+    local_start  = _ask_int(f"Eerste nummer (1-{MAX_LOCAL})", default=1)
+    global_start = base + local_start
+    count        = _ask_int("Aantal labels", default=COLS * ROWS)
+    border       = input("Rand om elke sticker tekenen? (j/n) [n]: ").strip().lower() == "j"
     print()
 
     sheets = -(-count // (COLS * ROWS))
-    output = f"{prefix}_{start:0{DIGITS}d}.pdf"
-    generate(start, count, prefix, DIGITS, output, border)
+    output = f"{code}_{global_start:0{DIGITS}d}.pdf"
+    generate(global_start, count, code, output, border)
 
-    first = f"{prefix}{start:0{DIGITS}d}"
-    last  = f"{prefix}{start + count - 1:0{DIGITS}d}"
-    print(f"Klaar: {count} stickers ({sheets} vel{'len' if sheets != 1 else ''})"
-          f"  {first} t/m {last}")
+    first_g = global_start
+    last_g  = global_start + count - 1
+    print(f"Klaar  : {count} stickers ({sheets} vel{'len' if sheets != 1 else ''})")
+    print(f"Labels : {code}{first_g:0{DIGITS}d} t/m {code}{last_g:0{DIGITS}d}")
+    print(f"QR data: ASN{first_g:0{DIGITS}d} t/m ASN{last_g:0{DIGITS}d}")
     print(f"Bestand: {output}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="ASN sticker generator — Topstick 8790 — Paperless-ngx",
+        description="ASN sticker generator - Topstick 8790 - Paperless-ngx",
         epilog="Zonder argumenten: interactief keuzemenu.",
     )
-    ap.add_argument("start", type=int, nargs="?", help="Eerste ASN nummer")
-    ap.add_argument("--prefix", default="ASN", help="Reeks prefix (bijv. CNTR)")
-    ap.add_argument("--count", type=int, default=COLS * ROWS, help="Aantal stickers")
-    ap.add_argument("--digits", type=int, default=DIGITS, help="Nul-opvulling breedte")
+    ap.add_argument("start", type=int, nargs="?",
+                    help="Eerste serienummer binnen de reeks (1-9999)")
+    ap.add_argument("--prefix", default="CNTR",
+                    help="Reeks: CNTR | REK | DIV | GAR")
+    ap.add_argument("--count", type=int, default=COLS * ROWS,
+                    help="Aantal stickers")
     ap.add_argument("--output", "-o", help="PDF bestandsnaam")
-    ap.add_argument("--border", action="store_true", help="Rand om elke sticker")
-    ap.add_argument("--calibrate", action="store_true", help="Kalibratie raster")
+    ap.add_argument("--border", action="store_true",
+                    help="Rand om elke sticker")
+    ap.add_argument("--calibrate", action="store_true",
+                    help="Kalibratie raster")
     args = ap.parse_args()
 
-    # No arguments → interactive menu
     if args.start is None and not args.calibrate:
         interactive()
         return
@@ -212,14 +243,21 @@ def main() -> None:
         print(f"Kalibratie raster -> {output}")
         return
 
-    start  = args.start
-    output = args.output or f"{args.prefix}_{start:0{args.digits}d}.pdf"
-    sheets = -(-args.count // (COLS * ROWS))
-    generate(start, args.count, args.prefix, args.digits, output, args.border)
+    series = _series_by_code(args.prefix)
+    if series is None:
+        print(f"Onbekende reeks: {args.prefix}. Kies uit: CNTR, REK, DIV, GAR")
+        return
 
-    first = f"{args.prefix}{start:0{args.digits}d}"
-    last  = f"{args.prefix}{start + args.count - 1:0{args.digits}d}"
-    print(f"{args.count} stickers ({sheets} vel)  {first} t/m {last} -> {output}")
+    code, desc, base = series
+    global_start = base + args.start
+    output = args.output or f"{code}_{global_start:0{DIGITS}d}.pdf"
+    sheets = -(-args.count // (COLS * ROWS))
+    generate(global_start, args.count, code, output, args.border)
+
+    first_g = global_start
+    last_g  = global_start + args.count - 1
+    print(f"{args.count} stickers ({sheets} vel)  "
+          f"ASN{first_g:0{DIGITS}d} - ASN{last_g:0{DIGITS}d}  -> {output}")
 
 
 if __name__ == "__main__":

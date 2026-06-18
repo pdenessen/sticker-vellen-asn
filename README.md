@@ -11,14 +11,14 @@ Each label contains:
 
 ## Label series
 
-| Code | Description |
-|------|-------------|
-| `CNTR` | Contracten |
-| `REK`  | Rekeningen |
-| `DIV`  | Diverse |
-| `GAR`  | Garanties & Handleidingen |
+| Code | Description | ASN range in Paperless |
+|------|-------------|------------------------|
+| `CNTR` | Contracten | ASN00001 – ASN09999 |
+| `REK`  | Rekeningen | ASN10001 – ASN19999 |
+| `DIV`  | Diverse | ASN20001 – ASN29999 |
+| `GAR`  | Garanties & Handleidingen | ASN30001 – ASN39999 |
 
-Labels are formatted as `CNTR00001`, `REK00042`, etc. (5-digit zero-padded numbers).
+Each series uses a fixed block of globally unique ASN numbers. The QR code always encodes `ASN` + the 5-digit global number (e.g. `ASN10001`), which is what Paperless-ngx stores as the document's ASN. The label text shows the series code + the same number (e.g. `REK` / `10001`), so the number on the sticker always matches what you see in Paperless.
 
 ---
 
@@ -43,38 +43,45 @@ python generate_asn_labels.py
 ```
 
 ```
-================================================
+========================================================
   ASN Sticker Generator  -  Topstick 8790
-================================================
+========================================================
 
 Kies een reeks:
-  1. CNTR   Contracten
-  2. REK    Rekeningen
-  3. DIV    Diverse
-  4. GAR    Garanties & Handleidingen
+  1. CNTR   Contracten                       (ASN 00001 - 09999)
+  2. REK    Rekeningen                       (ASN 10001 - 19999)
+  3. DIV    Diverse                          (ASN 20001 - 29999)
+  4. GAR    Garanties & Handleidingen        (ASN 30001 - 39999)
   5. Kalibratie raster (leeg raster voor uitlijning)
 
-Keuze (1-5): 1
-Reeks: CNTR - Contracten
-Eerste nummer: 1
+Keuze (1-5): 2
+
+Reeks  : REK - Rekeningen
+Bereik : ASN10001 - ASN19999
+
+Eerste nummer (1-9999) [1]:
 Aantal labels [270]:
 Rand om elke sticker tekenen? (j/n) [n]: n
 
-Klaar: 270 stickers (1 vel)  CNTR00001 t/m CNTR00270
-Bestand: CNTR_00001.pdf
+Klaar  : 270 stickers (1 vel)
+Labels : REK10001 t/m REK10270
+QR data: ASN10001 t/m ASN10270
+Bestand: REK_10001.pdf
 ```
 
-- Press **Enter** at "Aantal labels" to accept the default (270 = 1 full sheet).
-- The output PDF is named automatically: `{SERIES}_{FIRST NUMBER}.pdf`
+- Press **Enter** at "Eerste nummer" and "Aantal labels" to accept defaults.
+- The output PDF is named automatically: `{SERIES}_{GLOBAL ASN}.pdf`
 
 ### Command line
 
+The `start` argument is the series-relative number (1–9999); the script adds the series offset automatically.
+
 ```bash
-# One sheet of CNTR labels starting at 1
+# One sheet of CNTR labels starting at series nr 1 (QR: ASN00001 - ASN00270)
 python generate_asn_labels.py 1 --prefix CNTR
 
-# Two sheets of REK labels starting at 271
-python generate_asn_labels.py 271 --prefix REK --count 540
+# Second sheet of REK labels starting at series nr 271 (QR: ASN10271 - ASN10540)
+python generate_asn_labels.py 271 --prefix REK --count 270
 
 # Custom output filename
 python generate_asn_labels.py 1 --prefix GAR --output garanties.pdf
@@ -102,14 +109,20 @@ python generate_asn_labels.py --calibrate
 
 ## Paperless-ngx integration
 
-For automatic ASN detection, make sure your Paperless-ngx configuration matches the prefix you use:
+All QR codes use the single prefix `ASN`, so only one setting is needed — no changes required when switching series:
 
 ```env
 PAPERLESS_CONSUMER_ENABLE_ASN_BARCODE=true
-PAPERLESS_CONSUMER_ASN_BARCODE_PREFIX=CNTR   # change per series
+PAPERLESS_CONSUMER_ASN_BARCODE_PREFIX=ASN
+PAPERLESS_CONSUMER_BARCODE_UPSCALE=1.5
 ```
 
-When a scanned document contains one of these QR-code labels, Paperless-ngx automatically assigns the corresponding ASN.
+When a scanned document contains one of these QR-code labels, Paperless-ngx reads the barcode and assigns the matching ASN (the global number, e.g. `10001`). The series (CNTR / REK / DIV / GAR) is visible on the label text but is not part of the barcode.
+
+To automatically route documents to the correct folder/tag by series, use **Workflows** in the Paperless UI:
+- Trigger: *Barcode matches* `^ASN0[0-9]{4}$` → assign Document Type "Contracten"
+- Trigger: *Barcode matches* `^ASN1[0-9]{4}$` → assign Document Type "Rekeningen"
+- etc.
 
 ---
 
