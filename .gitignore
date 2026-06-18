@@ -1,0 +1,7 @@
+# Generated PDFs
+*.pdf
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
